@@ -742,4 +742,96 @@ mod tests {
             "modification time should not be updated"
         );
     }
+
+    #[cfg(windows)]
+    struct ReadonlyFile {
+        file: tempfile::NamedTempFile,
+        permissions: fs::Permissions,
+        attributes: u32,
+        atime: FileTime,
+        mtime: FileTime,
+    }
+
+    #[cfg(windows)]
+    impl ReadonlyFile {
+        fn new() -> io::Result<Self> {
+            use std::os::windows::fs::MetadataExt;
+
+            let file = Builder::new().prefix("filetime").tempfile()?;
+            fs::write(file.path(), b"read-only file contents")?;
+            let atime = FileTime::from_unix_time(10_000, 123_456_700);
+            let mtime = FileTime::from_unix_time(20_000, 234_567_800);
+            set_file_handle_times(file.as_file(), Some(atime), Some(mtime))?;
+            let metadata = file.as_file().metadata()?;
+            let mut fixture = Self {
+                permissions: metadata.permissions(),
+                attributes: metadata.file_attributes(),
+                file,
+                atime,
+                mtime,
+            };
+            let mut readonly = fixture.permissions.clone();
+            readonly.set_readonly(true);
+            fs::set_permissions(fixture.file.path(), readonly)?;
+            fixture.attributes = fixture.file.as_file().metadata()?.file_attributes();
+            Ok(fixture)
+        }
+
+        fn assert_times(&self, atime: FileTime, mtime: FileTime) -> io::Result<()> {
+            use std::os::windows::fs::MetadataExt;
+
+            let metadata = fs::metadata(self.file.path())?;
+            assert_eq!(FileTime::from_last_access_time(&metadata), atime);
+            assert_eq!(FileTime::from_last_modification_time(&metadata), mtime);
+            assert!(metadata.permissions().readonly());
+            assert_eq!(metadata.file_attributes(), self.attributes);
+            assert_eq!(fs::read(self.file.path())?, b"read-only file contents");
+            Ok(())
+        }
+    }
+
+    #[cfg(windows)]
+    impl Drop for ReadonlyFile {
+        fn drop(&mut self) {
+            fs::set_permissions(self.file.path(), self.permissions.clone()).unwrap();
+        }
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn set_readonly_file_times_test() -> io::Result<()> {
+        let file = ReadonlyFile::new()?;
+        let atime = FileTime::from_unix_time(30_000, 345_678_900);
+        let mtime = FileTime::from_unix_time(40_000, 456_789_100);
+        set_file_times(file.file.path(), atime, mtime)?;
+        file.assert_times(atime, mtime)
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn set_readonly_file_atime_test() -> io::Result<()> {
+        let file = ReadonlyFile::new()?;
+        let atime = FileTime::from_unix_time(30_000, 345_678_900);
+        set_file_atime(file.file.path(), atime)?;
+        file.assert_times(atime, file.mtime)
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn set_readonly_file_mtime_test() -> io::Result<()> {
+        let file = ReadonlyFile::new()?;
+        let mtime = FileTime::from_unix_time(40_000, 456_789_100);
+        set_file_mtime(file.file.path(), mtime)?;
+        file.assert_times(file.atime, mtime)
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn set_readonly_file_times_no_follow_test() -> io::Result<()> {
+        let file = ReadonlyFile::new()?;
+        let atime = FileTime::from_unix_time(30_000, 345_678_900);
+        let mtime = FileTime::from_unix_time(40_000, 456_789_100);
+        set_symlink_file_times(file.file.path(), atime, mtime)?;
+        file.assert_times(atime, mtime)
+    }
 }

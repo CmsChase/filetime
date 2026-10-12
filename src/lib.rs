@@ -793,7 +793,10 @@ mod tests {
     #[cfg(windows)]
     impl Drop for ReadonlyFile {
         fn drop(&mut self) {
-            fs::set_permissions(self.file.path(), self.permissions.clone()).unwrap();
+            let result = fs::set_permissions(self.file.path(), self.permissions.clone());
+            if !std::thread::panicking() {
+                result.unwrap();
+            }
         }
     }
 
